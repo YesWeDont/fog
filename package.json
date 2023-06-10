@@ -12,6 +12,5 @@
   ],
   "author": "YesWeDont",
   "license": "MIT",
-  "dependencies": { "simple-socks":"3.1.0" },
-  "type": "module"
+  "dependencies": { "proxy":"1.0.2" }
 }
