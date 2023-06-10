@@ -1,16 +1,14 @@
 {
   "name": "fog",
   "version": "1.0.1",
-  "description": "Chain f(x) and g(x) to form f(g(x))!",
+  "description": "Chain proxies together!",
   "scripts": {
     "legalprox": "node ./legalprox",
     "client": "node ./client/index.js"
   },
   "keywords": [
     "legal",
-    "prox",
-    "fog",
-    "proxy"
+    "prox"
   ],
   "author": "YesWeDont",
   "license": "MIT",
@@ -18,8 +16,5 @@
     "ws": "^8.13.0",
     "longjohn": "^0.2.12"
   },
-  "devDependencies": {
-    "proxy": "^1.0.2",
-    "@types/ws":"^8.13.0"
-  }
+  "devDependencies":{ "@types/ws":"^8.5.4" }
 }
