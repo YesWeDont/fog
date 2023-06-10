@@ -1,0 +1,17 @@
+{
+  "name": "legalprox",
+  "version": "0.0.1",
+  "description": "A very legal \"prox\"",
+  "main": "index.js",
+  "scripts": {
+    "test": "node index"
+  },
+  "keywords": [
+    "legal",
+    "prox"
+  ],
+  "author": "YesWeDont",
+  "license": "MIT",
+  "dependencies": { "simple-socks":"3.1.0" },
+  "type": "module"
+}
