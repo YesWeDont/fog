@@ -2,32 +2,33 @@
 
 // import os from 'node:os';
 import chalk from 'chalk';
-import { loggerConfig, format, print } from './logger.js'
+import { loggerConfig, format, print } from './logger.js';
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 
 /** @typedef {Awaited<ReturnType<typeof parseConfig>>} Config */
 export async function parseConfig() {
-    loggerConfig.defaultWid = 'threadMgr';
+    loggerConfig.defaultWid = 'thrdMgr';
     const defaultThreads = 2;
-    const parsed = parseArgs({
-        options: {
-            'help': { type: 'boolean', short: 'h' },
-            'verbose': { type: 'boolean', short: 'v', multiple: true },
-            'port': { type: 'string', default: process.env.PORT, short: 'p' },
-            'config': { type: 'string', default: process.env.CONFIG, short: 'c' },
-            'threads': { type: 'string', default: defaultThreads+'', short: 't' },
-            'auth': {type: 'string', short: 'a', default: process.env.AUTH ?? ''},
-            'looseTLS': { type: 'boolean', short: 'l', default: false },
-            'https-cert': { type: 'string', short: 'C', default: process.env.HTTPS_CERT },
-            'https-key': { type: 'string', short: 'k', default: process.env.HTTPS_KEY },
-            'admin-secret': {type: 'string', short: 's', default: process.env.SECRET},
-        }, allowPositionals: true, strict: true
-    }),
-    {values: options, positionals: args} = parsed,
-    errPrefix = format({level: 2, lenient: true}, ['config', 'err']),
-    port = parseInt(options.port??''),
-    threads = parseInt(options.threads??'');
+    const
+        parsed = parseArgs({
+            options: {
+                'help':         { type: 'boolean', short: 'h' },
+                'verbose':      { type: 'boolean', short: 'v', multiple: true },
+                'port':         { type: 'string', default: process.env.PORT, short: 'p' },
+                'config':       { type: 'string', default: process.env.CONFIG, short: 'c' },
+                'threads':      { type: 'string', default: defaultThreads+'', short: 't' },
+                'auth':         {type: 'string', short: 'a', default: process.env.AUTH ?? ''},
+                'looseTLS':     { type: 'boolean', short: 'l', default: false },
+                'https-cert':   { type: 'string', short: 'C', default: process.env.HTTPS_CERT },
+                'https-key':    { type: 'string', short: 'k', default: process.env.HTTPS_KEY },
+                'admin-secret': { type: 'string', short: 's', default: process.env.SECRET},
+            }, allowPositionals: true, strict: true
+        }),
+        {values: options, positionals: args} = parsed,
+        errPrefix = format({level: 2, lenient: true}, ['config', 'err']),
+        port = parseInt(options.port??''),
+        threads = parseInt(options.threads??'2');
     loggerConfig.minLevel = (options.verbose?.length||0) * -1;
     if(options.help) {
         const b = chalk.bold;
@@ -36,18 +37,32 @@ Name
     ${b('fog')} - Robust composition of proxies, much like function composition: f∘g(x)=f(g(x)).
 Synopsis
     ${b('fog')} [${b('-h')} | ${b('--help')}]
-    ${b('fog')} [${b('-v')} | ${b('--verbose')}] [${b('-p')} | ${b('--port')} port] [${b('-c')} | ${b('--config')} configFilePath] [${b('-t')} | ${b('--threads')} threadCount] [${b('-a')} | ${b('--auth')} authorizationHeader] [${b('l')} | ${b('--looseTLS')}] [${b('-k')} | ${b('--https-key')} keyFile] [${b('-k')} | ${b('--https-cert')} certFile] [${b('-s')} | ${b('--admin-secret')} secret] [server type]
+    ${b('fog')} [${b('-v')} | ${b('--verbose')}] [${b('-p')} | ${b('--port')} port] [${b('-c')} | ${b('--config')} configFilePath] [${b('-t')} | ${b('--threads')} threadCount] [${b('-a')} | ${b('--auth')} authorizationHeader] [${b('l')} | ${b('--looseTLS')}] [${b('-k')} | ${b('--https-key')} keyFile] [${b('-C')} | ${b('--https-cert')} certFile] [${b('-s')} | ${b('--admin-secret')} secret] [serverType]
 Description
-    ${b('fog')} chains multiple proxies together and hosts the result of "composing" these proxies together on a local machine. Alternatively it can also host \`scifin\` proxies.
+    ${b('fog')} chains multiple proxies together and hosts the result of 'composing' these proxies together on a local machine. Alternatively it can also host \`scifin\` proxies.
     Options that ${b('fog')} understands:
     ${b('-h')} | ${b('--help')}
         Display this help page
     ${b('-v')} | ${b('--verbose')}
         Produce more detailed logs
     ${b('-p')} | ${b('--port')} port
-        Selects which port the resultant server is hosted on
+        Selects which port the resultant server is hosted on. Defaults to random port
     ${b('-c')} | ${b('--config')}
-        Select the proxy config file for fog server (only for fog servers)
+        (fog only) Select the proxy config file for fog server
+    ${b('-t')} | ${b('--threads')} threadCount
+        Set the number of threads used by the server instance. Defaults to 2 threads.
+    ${b('-a')} | ${b('--auth')} authorizationHeader]
+        Only allow requests containing Proxy-Authorization header with the specified contents
+    ${b('l')} | ${b('--looseTLS')}
+        If true, disables checking of SSL/TLS certificates when connecting to SSL/TLS targets
+    [${b('-k')} | ${b('--https-key')} keyFile]
+        When used in conjunction with ${b('--https-cert')}, hosts a SSL/TLS server instead using given private key file.
+    [${b('-C')} | ${b('--https-cert')} certFile]
+        When used in conjunction with ${b('--https-key')}, hosts a SSL/TLS server instead using given public cert file.
+    [${b('-s')} | ${b('--admin-secret')} secret]
+        (SciFin only) Allow the server to be shut down remotely.
+    [serverType]
+        The type of server being hosted, either \`fog\` or \`scifin\`, defaults to \`fog\` if not provided.
 Examples
     ${b('fog')} # Hosts a direct HTTP proxy server on a random port
     ${b('fog')} -vvc ./config.json -p1080 fog # Host a fog server with servers defined by \`config.json\`, very verbose, on port 1080
@@ -56,13 +71,13 @@ Examples
         process.exit(0);
     }
 
-    if(options.port && (isNaN(port) || port < 0 || !Number.isInteger(port)))
+    if(options.port && isNaN(port) || port < 0 || !Number.isInteger(port))
         throw new Error(`${errPrefix} Invalid port, expected a positive integer`);
 
-    if(options.threads && (isNaN(threads) || threads < 0 || !Number.isInteger(threads)))
+    if(isNaN(threads) || threads < 0 || !Number.isInteger(threads))
         throw new Error(`${errPrefix} Invalid number of workers, expected a positive integer`);
 
-    print({level: 1}, ['cli-config', 'load'], 'Using %d threads on port %s', threads, isNaN(port)?'<random port>':port);
+    print({level: 1}, ['cliCfg', 'parse'], '%d threads on port %s', threads, isNaN(port) ? '<random port>' : port);
     let src = '';
     if(args[0] == 'fog') src = './servers/fog/fog_server.js';
     else if(args[0] == 'scifin') src = './servers/scifin/scifin_server.js';
@@ -70,7 +85,7 @@ Examples
         print({level: 1}, 'No server type given, defaulting to fog client');
         src = './servers/fog/fog_server.js';
     }
-    if(!src) throw new Error(format({level: 2}, 'Unrecognised server type, expected either `fog` or `scifin`'))
+    if(!src) throw new Error(format({level: 2}, 'Unrecognised server type, expected either `fog` or `scifin`'));
 
     print({level: -1}, ['load'], src);
     
@@ -111,11 +126,11 @@ Examples
         ssl: sslConfig,
         proxies, 
         port: port?port:undefined, threads, src,
-        looseTLS: options.looseTLS,
-        secret: options['admin-secret'],
-        auth: options['auth'],
+        looseTLS: options.looseTLS??false,
+        secret: options['admin-secret']??'',
+        auth: options['auth']??'',
         minLevel: loggerConfig.minLevel
-    }
+    };
 }
 
 /** @returns {Promise<Config>} */

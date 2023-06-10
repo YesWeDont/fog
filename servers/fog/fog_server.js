@@ -3,173 +3,149 @@ import { ServerResponse, createServer } from 'node:http';
 import http from 'node:http';
 import { createServer as createHTTPSServer } from 'node:https';
 import { inspect } from 'node:util';
-import { print } from '../../logger.js'
-import { logOnErr } from '../../logOnErr.js';
+import { print } from '../../logger.js';
+import { logOnErr, removeHopByHop } from '../../util.js';
 import { awaitConfig } from '../../config.js';
 import { createConnection } from './agents/index.js';
-import { Duplex } from 'node:stream';
 
 const {ssl, proxies, ...config} = await awaitConfig();
-const hopByHopHeaders = [ 'Connection', 'Keep-Alive', 'Proxy-Authenticate', 'Proxy-Authorization','TE', 'Trailers', 'Transfer-Encoding', 'Upgrade' ];
 
 /** @type {import('../../types.js').ServerCreator} */
 const create = ssl.key && ssl.cert ?
     (options, requestListener) => createHTTPSServer(options, requestListener) :
     (options, requestListener) => createServer(requestListener);
 const server = create(ssl, async (req, res) => {
-    const onClientError = logOnErr(req, 'client');
-    req.socket.pause()
+    const unbindReqErrLog = logOnErr(req, 'client');
     try{
-        const url = new URL(req.url || '');
-        const headers = Object.fromEntries(Object.entries(req.headers)
-            .filter(([name])=>!hopByHopHeaders.includes(name)) // Get rid of headers if they are deemed 'Hop By Hop'
-        );
+        const ac = new AbortController();
+        const url = new URL(req.url/*?.replace(/^(\/+)/, '')*/ || ''); // delete starting slashes - autocannon tests
+        const headers = removeHopByHop(req.headers);
         if(url.protocol !== 'http:') return res.writeHead(400).end('https: requests should be made through CONNECT proxies');
         
-        const target = await createConnection(proxies, {hostname: url.hostname, port: +(url.port||'80')});
-        const foreign = http.request({
-            hostname: url.hostname, port: (url.port || '80'), path: url.pathname,
-            method: req.method, headers,
+        function abort(){ ac.abort(); }
+        req.socket.on('close', abort);
+        const target = await createConnection(proxies, ac.signal, {hostname: url.hostname, port: +(url.port || '80')});
+        const foreign = http.request(url, {
+            method: req.method, headers, signal: ac.signal,
             createConnection: ()=>(/** @type {import('node:net').Socket}*/ (target)),
         }, onResp);
 
+        req.socket.off('close', abort);
         req.pipe(foreign);
-        req.socket.resume();
-        
-        // const onForeignError = logOnErr(foreign, 'foreign');
-        req.on('error', abortRequest);
-        foreign.on('close', abortRequest);
-        function abortRequest(){
-            foreign.destroy();
+        const unbindForeignErrLog = logOnErr(foreign, 'foreign');
+        req.once('error', cleanup1); // the `close` event occurs when req has run out of data
+        foreign.once('close', cleanup1);
+
+        function cleanup1(){
+            unbindReqErrLog();
+            req.unpipe(foreign);
+            unbindForeignErrLog();
             foreign.off('response', onResp);
+            foreign.off('close', cleanup1);
+            foreign.end(()=> foreign.destroy());
+            target.end(()=> target.destroy());
             req.destroy();
-            res.destroy();
-            req.off('close', abortRequest);
-            foreign.off('close', abortRequest);
+            req.off('error', cleanup1);
+            res.end(() => { res.destroy(); });
         }
         function onResp(resp){
-            foreign.off('close', abortRequest);
-            req.off('close', abortRequest);
-            const headers = Object.fromEntries(Object.entries(resp.headers)
-                .filter(([name])=>!hopByHopHeaders.includes(name)) // Get rid of headers if they are deemed 'Hop By Hop'
-            );
+            const headers = removeHopByHop(resp.headers);
             res.writeHead(resp.statusCode||200, resp.statusMessage, headers);
             resp.pipe(res);
-
-            res.on('close', cleanup);
-            req.on('close', cleanup);
-            resp.once('close', cleanup);
-            foreign.on('close', cleanup);
-            function cleanup() {
-                foreign.off('close', cleanup);
-                foreign.end();
-                // foreign.off('error', onForeignError);
-                res.off('close', cleanup);
-                res.end(() => res.destroy());
-                resp.off('close', cleanup);
+            res.once('close', cleanup2);
+            resp.once('close', cleanup2);
+            function cleanup2() {
+                res.off('close', cleanup2);
+                res.destroy();
+                resp.off('close', cleanup2);
+                resp.unpipe(res);
                 resp.destroy();
-                req.destroy();
-                req.off('error', onClientError);
-                req.off('close', cleanup);
-                
-                print({ ev: 'cleanup', level: -1 }, ['conn', 'cleanup'], url.toString());
+                cleanup1();
             }
         }
     } catch(e){
         // handle any errors during connection
         const debug = inspect(e);
-        print({ level: 2 }, ['connect', 'err'], debug);
-        if(!res || res?.headersSent){
+        print({ level: 2 }, ['connect', 'err'], e.message || debug);
+        if(res.headersSent){
+            print({level: 1}, ['cleanup'], 'Headers were sent already when error occurred');
             res.destroy();
-            req.destroy()
-            print({level: 1}, ['cleanup'], 'Headers were sent already when error occurred')
+            req.destroy();
         }
-        else if (e?.code == 'ENOTFOUND') res?.writeHead(404).end('Host not found');
-        else if (e?.code == 'ERR_INVALID_URL') res?.writeHead(400).end('Invalid URL');
-        else res
-                .writeHead(500, { 'Content-Type': 'text/plain', 'Content-Length': debug.length })
-                .end(debug);
+        else if (e?.code == 'ENOTFOUND') res.writeHead(404).end('Host not found', unbindReqErrLog);
+        else if (e?.code == 'ERR_INVALID_URL') res.writeHead(400).end('Invalid URL', unbindReqErrLog);
+        else res.writeHead(500).end(e.message || debug, unbindReqErrLog);
     }
 })
-    .on('connect', async function onconnect(req, /** @type {import('net').Socket} */socket, _head) {
+    .on('connect', async function onconnect(req, /** @type {import('net').Socket} */socket) {
         // Code is mostly based on the `proxy` library.
-        socket.pause();
         
-        /** @type {ServerResponse|null} */
-        let res = new ServerResponse(req);
+        const res = new ServerResponse(req);
+        const ac = new AbortController();
         const url = req.headers.host || req.url;
         res.shouldKeepAlive = false;
         res.chunkedEncoding = false;
         res.useChunkedEncodingByDefault = false;
         res.assignSocket(socket);
         function onFinish() {
-            if (res) { res.detachSocket(socket) }
+            if (res) { res.detachSocket(socket); res.destroy(); }
             socket.end();
-            res = null;
         }
         res.once('finish', onFinish);
 
-        const onSocketError = logOnErr(socket, 'client');
+        const unbindSocketErrLog = logOnErr(socket, 'client');
         
         if (!url) {
             print({level:1}, ['client', 'err'], 'No `Host` header or target URL given');
             return res.writeHead(400).end('No `Host` header or target URL given.');
         }
-        if (!authenticate(req)) {
-            res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="proxy"' });
-            res.end();
-            return;
-        }
-
-        socket.resume();
-
+        if (!authenticate(req)) return res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="proxy"' }).end();
         try {
             const { hostname, port: _port } = new URL('http://' + url);
             const port = _port || '80';
+            function abort(){ac.abort();}
+            socket.on('close', abort);
+            const target = await createConnection(proxies, ac.signal, {hostname, port: +port});
 
-            const target = await createConnection(proxies, {hostname, port: +port});
+            // Send 200
+            socket.off('close', abort);
+            res.off('finish', onFinish)
+                .writeHead(200, 'Connection established')
+                .flushHeaders();
+            res.detachSocket(socket);
+            res.destroy();
+            socket.pipe(target);
+            target.pipe(socket);
 
-            if (res) {
-                // Send 200
-                res.removeListener('finish', onFinish);
-                res.writeHead(200, 'Connection established');
-                res.flushHeaders();
-                res.detachSocket(socket);
-                res = null;
-                socket.pipe(target);
-                target.pipe(socket);
-
-                // error management, cleanup
-                const onTargetError = logOnErr(target, 'foreign');
-                function cleanup() {
-                    target.off('close', cleanup);
-                    target.end(() => target.destroy());
-                    target.off('error', onTargetError);
-                    socket.off('close', cleanup);
-                    socket.off('error', onSocketError);
-                    socket.end(() => socket.destroy());
-                    print({ ev: 'cleanup', level: -1 }, ['conn', 'cleanup'], '%s:%s', hostname, port);
-                }
-                target.once('close', cleanup);
-                socket.once('close', cleanup);
-            } else {
-                // the res socket died halfway...
-                target.destroy();
+            // error management, cleanup
+            const unbindTargetErrorLog = logOnErr(target, 'foreign');
+            function cleanup() {
+                unbindTargetErrorLog();
+                target.unpipe(socket);
+                target.off('close', cleanup);
+                target.end(() => target.destroy());
+                socket.unpipe(target);
+                unbindSocketErrLog();
+                socket.off('close', cleanup);
+                socket.end(() => socket.destroy());
             }
+            target.once('close', cleanup);
+            socket.once('close', cleanup);
         } catch (e) {
             // handle any errors during connection
             const debug = inspect(e);
             print({ level: 2 }, ['connect', 'err'], debug);
-            if(!res || res?.headersSent) print({level: 1}, ['cleanup'], 'Headers were already sent')
+            if(res.destroyed) print({level: 1}, ['cleanup'], 'res already destroyed');
             else if (e?.code == 'ENOTFOUND') res?.writeHead(404).end('Host not found');
             else if (e?.code == 'ERR_INVALID_URL') res?.writeHead(400).end('Invalid URL');
-            else res
-                ?.writeHead(500, { 'Content-Type': 'text/plain', 'Content-Length': debug.length })
-                .end(debug);
+            else res.writeHead(500).end(debug);
         }
     })
     .listen(config.port);
-process.on('exit', () => print({level: 1}, ['exit'], `Worker exiting...`));
+process.on('exit', () =>{
+    print({level: 1}, ['exit'], 'Worker exiting...');
+    server.close();
+});
 function authenticate(/** @type {import('http').IncomingMessage} */ req) {
-    return (req.headers['proxy-authorization'] ?? '') == config.auth
+    return (req.headers['proxy-authorization'] ?? '') == (config.auth??'');
 }

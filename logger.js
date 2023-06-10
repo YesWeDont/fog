@@ -12,7 +12,6 @@ export const loggerConfig = {
     minLevel: process.env.VERBOSE?-2: 0,
     defaultWid: process&&cluster.isPrimary? false : process.pid+'',
     defaultLevel: 0,
-    delegateMaster: true,
     defaultEvNames: {
         '-2': 'debug', '-1': 'verbose', '0': 'log',
         '1': 'warn', '2': 'err'
@@ -22,7 +21,7 @@ export const loggerConfig = {
         '0': chalk.blue, '1': chalk.yellow,
         '2': chalk.red
     }
-}
+};
 
 /**
  * @overload @param {PrintOptions} opts @param {string[]} ev @param {...any} args @returns {ParsedOptions}
@@ -33,17 +32,17 @@ export const loggerConfig = {
  * @param {...any} params
 */
 function parseArgs(...params) {
-    let /** @type {PrintOptions} */opts = {}, /** @type {string[]}*/ev = [], ret = '',
+    let /** @type {PrintOptions} */opts = {}, /** @type {string[]}*/ev = [],
         _opts = params[0], _ev = params[1], args = params.slice(2);
 
-    if (!opts) args = params // undefined as first argument: this is neither opts nor ev, so taking it as a initial parameter.
+    if (!opts) args = params; // undefined as first argument: this is neither opts nor ev, so taking it as a initial parameter.
     if (_opts instanceof Array) { // ev as first argument
-        ev = _opts
-        if (typeof _ev == 'object' && ev) opts = _ev // opts as the second argument
+        ev = _opts;
+        if (typeof _ev == 'object' && ev) opts = _ev; // opts as the second argument
         else if (arguments.length >= 2) args.unshift(_ev);
     } else if (typeof _opts == 'object' && opts) { // opts as first argument
         opts = _opts;
-        if (_ev instanceof Array) ev = _ev // ev as second argument: the classic, expected way of calling.
+        if (_ev instanceof Array) ev = _ev; // ev as second argument: the classic, expected way of calling.
         else if (arguments.length >= 2) args.unshift(_ev); // ev was probably meant to be part of args...
     } else { // first argument was neither opts or ev
         if (arguments.length == 1) args.unshift(_opts);
@@ -62,10 +61,10 @@ function parseArgs(...params) {
 
         ev.forEach(a => {
             if (typeof a !== 'string' || !a) throw new Error(format({ level: 2 }, 'Invalid `ev` passed to `format()`, expected it to be an array of non-empty strings but one of the values was %o', a));
-        })
+        });
     }
 
-    return { opts, ev, args }
+    return { opts, ev, args };
 }
 
 /**
@@ -90,7 +89,7 @@ function formatParsed(parsed) {
     else ret += (omitWid ? '' : '-') + loggerConfig.defaultEvNames[opts.level];
 
     const next = utilFormat(...args);
-    if (!next && !(loggerConfig.lenient || opts.lenient)) console.warn(format({ ...opts, level: 1 }, 'No arguments passed to log'))
+    if (!next && !(loggerConfig.lenient || opts.lenient)) console.warn(format({ ...opts, level: 1 }, 'No arguments passed to log'));
 
     return loggerConfig.levelFormatters[opts.level]('[' + ret + ']') + (next === '' ? '' : ' ' + next);
 }
@@ -103,25 +102,8 @@ function formatParsed(parsed) {
  * @overload @param {...any} args @returns {void}
  * @param {...any} params @returns {void}
 */
-export const print = loggerConfig.delegateMaster? cluster.isPrimary ?
-(()=>{
-    cluster.on('message', (_w, message)=>{ if(message.type === 'LOG') printFromParsed(message.data) });
-    return doPrint;
-})():
-(...params)=>{process.send?.({type: 'LOG', data: parseArgs(...params)});}:
-doPrint;
-
-/**
- * @overload @param {PrintOptions} opts @param {string[]} ev @param {...any} args @returns {void}
- * @overload @param {string[]} ev @param {PrintOptions} opts @param {...any} args @returns {void}
- * @overload @param {PrintOptions} opts @param {...any} args @returns {void}
- * @overload @param {string[]} opts @param {...any} args @returns {void}
- * @overload @param {...any} args @returns {void}
- * @param {...any} params @returns {void}
-*/
-function doPrint(...params) { printFromParsed(parseArgs(...params)); }
-/** @param {ParsedOptions} parsed */
-function printFromParsed(parsed) {
+export function print(...params) {
+    const parsed = parseArgs(...params);
     const str = formatParsed(parsed);
     if(loggerConfig.minLevel > parsed.opts.level) return;
     else if(parsed.opts.level <= 0) console['log'](str);
