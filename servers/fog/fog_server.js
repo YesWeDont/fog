@@ -1,32 +1,95 @@
 // @ts-check
 import { ServerResponse, createServer } from 'node:http';
+import http from 'node:http';
 import { createServer as createHTTPSServer } from 'node:https';
-import { createConnection as createSciFinConnection } from './agents/scifin_agent.js';
-import { createConnection as createHTTPConnection } from './agents/http_agent.js';
 import { inspect } from 'node:util';
-import { connect } from 'node:net';
-import { Duplex } from 'node:stream';
 import { print } from '../../logger.js'
 import { logOnErr } from '../../logOnErr.js';
+import { awaitConfig } from '../../config.js';
+import { createConnection } from './agents/index.js';
+import { Duplex } from 'node:stream';
+
+const {ssl, proxies, ...config} = await awaitConfig();
+const hopByHopHeaders = [ 'Connection', 'Keep-Alive', 'Proxy-Authenticate', 'Proxy-Authorization','TE', 'Trailers', 'Transfer-Encoding', 'Upgrade' ];
 
 /** @type {import('../../types.js').ServerCreator} */
-const create = process.env.SSL_KEY && process.env.SSL_CERT ?
+const create = ssl.key && ssl.cert ?
     (options, requestListener) => createHTTPSServer(options, requestListener) :
     (options, requestListener) => createServer(requestListener);
+const server = create(ssl, async (req, res) => {
+    const onClientError = logOnErr(req, 'client');
+    req.socket.pause()
+    try{
+        const url = new URL(req.url || '');
+        const headers = Object.fromEntries(Object.entries(req.headers)
+            .filter(([name])=>!hopByHopHeaders.includes(name)) // Get rid of headers if they are deemed 'Hop By Hop'
+        );
+        if(url.protocol !== 'http:') return res.writeHead(400).end('https: requests should be made through CONNECT proxies');
+        
+        const target = await createConnection(proxies, {hostname: url.hostname, port: +(url.port||'80')});
+        const foreign = http.request({
+            hostname: url.hostname, port: (url.port || '80'), path: url.pathname,
+            method: req.method, headers,
+            createConnection: ()=>(/** @type {import('node:net').Socket}*/ (target)),
+        }, onResp);
 
-/** @type {import('../../types.js').Config} */
-const { sslConfig, serverConfig } = await new Promise(resolve => {
-    process.on('message', ({ data, type }) => {
-        if (type == 'CONFIG') resolve(data);
-    });
-    process.send?.({ type: 'REQUEST_CONFIG', data: null });
-});
+        req.pipe(foreign);
+        req.socket.resume();
+        
+        // const onForeignError = logOnErr(foreign, 'foreign');
+        req.on('error', abortRequest);
+        foreign.on('close', abortRequest);
+        function abortRequest(){
+            foreign.destroy();
+            foreign.off('response', onResp);
+            req.destroy();
+            res.destroy();
+            req.off('close', abortRequest);
+            foreign.off('close', abortRequest);
+        }
+        function onResp(resp){
+            foreign.off('close', abortRequest);
+            req.off('close', abortRequest);
+            const headers = Object.fromEntries(Object.entries(resp.headers)
+                .filter(([name])=>!hopByHopHeaders.includes(name)) // Get rid of headers if they are deemed 'Hop By Hop'
+            );
+            res.writeHead(resp.statusCode||200, resp.statusMessage, headers);
+            resp.pipe(res);
 
-const server = create(sslConfig, (req, res) => {
-    // rude clients
-    const onError = logOnErr(req, 'client');
-    print({ level: 1 }, ['client', 'err'], 'Incorrect method %s, expected CONNECT', req.method)
-    return res.writeHead(405).end(()=>req.off('error', onError));
+            res.on('close', cleanup);
+            req.on('close', cleanup);
+            resp.once('close', cleanup);
+            foreign.on('close', cleanup);
+            function cleanup() {
+                foreign.off('close', cleanup);
+                foreign.end();
+                // foreign.off('error', onForeignError);
+                res.off('close', cleanup);
+                res.end(() => res.destroy());
+                resp.off('close', cleanup);
+                resp.destroy();
+                req.destroy();
+                req.off('error', onClientError);
+                req.off('close', cleanup);
+                
+                print({ ev: 'cleanup', level: -1 }, ['conn', 'cleanup'], url.toString());
+            }
+        }
+    } catch(e){
+        // handle any errors during connection
+        const debug = inspect(e);
+        print({ level: 2 }, ['connect', 'err'], debug);
+        if(!res || res?.headersSent){
+            res.destroy();
+            req.destroy()
+            print({level: 1}, ['cleanup'], 'Headers were sent already when error occurred')
+        }
+        else if (e?.code == 'ENOTFOUND') res?.writeHead(404).end('Host not found');
+        else if (e?.code == 'ERR_INVALID_URL') res?.writeHead(400).end('Invalid URL');
+        else res
+                .writeHead(500, { 'Content-Type': 'text/plain', 'Content-Length': debug.length })
+                .end(debug);
+    }
 })
     .on('connect', async function onconnect(req, /** @type {import('net').Socket} */socket, _head) {
         // Code is mostly based on the `proxy` library.
@@ -42,6 +105,7 @@ const server = create(sslConfig, (req, res) => {
         function onFinish() {
             if (res) { res.detachSocket(socket) }
             socket.end();
+            res = null;
         }
         res.once('finish', onFinish);
 
@@ -63,50 +127,7 @@ const server = create(sslConfig, (req, res) => {
             const { hostname, port: _port } = new URL('http://' + url);
             const port = _port || '80';
 
-            /** @type {Promise<Duplex|undefined>} */
-            const init = Promise.resolve(undefined);
-            const target = await (
-                
-                // crreate socket from config...
-                await serverConfig.reduce(async (prev, curr, index) => {
-                    let socket = await prev;
-                    let next = serverConfig[index + 1] || { hostname, port: +port }
-                    if (curr.type == 'scifin')
-                        return await createSciFinConnection(curr, next, socket)
-                    else if (curr.type == 'http')
-                        return await createHTTPConnection(curr, next, socket)
-                }, init)
-                
-                .then(socket => {
-                    if (socket) return socket;
-                    // ...but direct mode if no config
-                    else return new Promise((resolve, reject) => {
-                        const socket = connect( { host: hostname, port: +port },
-                            () => {
-                                socket.off('error', reject);
-                                print({level: -1}, ['direct', 'conn'], '%s:%s', hostname, port);
-                                resolve(socket)
-                            }
-                        );
-                        socket.once('error', reject);
-                    })
-                },
-                
-                err => {
-                    // handle errors during protocol handshake
-                    if (err instanceof Error) throw err;
-                    // HTTP related errors
-                    else if (err.req && err.res) {
-                        print(['handshake', 'err'], 'HTTP status %d %s', err.res.statusCode, err.res.statusMessage);
-                        res?.writeHead(err.res.statusCode, err.res.headers);
-                        err.res.pipe(res, { end: true });
-                        err.res?.on('close', () => err.req.destroy())
-                        return 0;
-                    }
-                })
-            );
-            
-            if (target == 0) return; // there was an error and it has been handled
+            const target = await createConnection(proxies, {hostname, port: +port});
 
             if (res) {
                 // Send 200
@@ -115,38 +136,40 @@ const server = create(sslConfig, (req, res) => {
                 res.flushHeaders();
                 res.detachSocket(socket);
                 res = null;
-            }
+                socket.pipe(target);
+                target.pipe(socket);
 
-            socket.pipe(target);
-            target.pipe(socket);
-
-            // error management, cleanup
-            const onTargetError = logOnErr(target, 'foreign');
-            function cleanup() {
-                target.off('close', cleanup);
-                target.end(() => target.destroy());
-                target.off('error', onTargetError);
-                socket.off('close', cleanup);
-                socket.off('error', onSocketError);
-                socket.end(() => socket.destroy());
-                print({ ev: 'cleanup', level: -1 }, '%s:%s', hostname, port);
+                // error management, cleanup
+                const onTargetError = logOnErr(target, 'foreign');
+                function cleanup() {
+                    target.off('close', cleanup);
+                    target.end(() => target.destroy());
+                    target.off('error', onTargetError);
+                    socket.off('close', cleanup);
+                    socket.off('error', onSocketError);
+                    socket.end(() => socket.destroy());
+                    print({ ev: 'cleanup', level: -1 }, ['conn', 'cleanup'], '%s:%s', hostname, port);
+                }
+                target.once('close', cleanup);
+                socket.once('close', cleanup);
+            } else {
+                // the res socket died halfway...
+                target.destroy();
             }
-            target.once('close', cleanup);
-            socket.once('close', cleanup);
         } catch (e) {
             // handle any errors during connection
             const debug = inspect(e);
-            if (e?.code == 'ENOTFOUND') res?.writeHead(404).end('Host not found');
-            if (e?.code == 'ERR_INVALID_URL') res?.writeHead(400).end('Invalid URL');
-            else if (res)
-                res
-                    .writeHead(500, { 'Content-Type': 'text/plain', 'Content-Length': debug.length })
-                    .end(debug);
             print({ level: 2 }, ['connect', 'err'], debug);
+            if(!res || res?.headersSent) print({level: 1}, ['cleanup'], 'Headers were already sent')
+            else if (e?.code == 'ENOTFOUND') res?.writeHead(404).end('Host not found');
+            else if (e?.code == 'ERR_INVALID_URL') res?.writeHead(400).end('Invalid URL');
+            else res
+                ?.writeHead(500, { 'Content-Type': 'text/plain', 'Content-Length': debug.length })
+                .end(debug);
         }
     })
-    .listen(process.env.PORT);
+    .listen(config.port);
 process.on('exit', () => print({level: 1}, ['exit'], `Worker exiting...`));
 function authenticate(/** @type {import('http').IncomingMessage} */ req) {
-    return (req.headers['proxy-authorization'] ?? '') == (process.env.AUTH ?? '')
+    return (req.headers['proxy-authorization'] ?? '') == config.auth
 }

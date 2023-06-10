@@ -3,7 +3,7 @@ import http, { IncomingMessage } from 'node:http';
 import net from 'node:net';
 import { Duplex } from 'node:stream';
 import tls from 'node:tls';
-import { print } from '../../../logger.js';
+import { format, print } from '../../../logger.js';
 /**
  * @param {import('../../../types.js').Proxy} proxy
  * @param {import('../../../types.js').Target} next
@@ -38,7 +38,7 @@ export async function createConnection(proxy, next, socket){
         createConnection: ()=>_socket,
         headers:{ host: next.hostname+':'+next.port, }
     });
-    request.setHeader('User-Agent', 'fog/v2.0.1')
+    request.setHeader('User-Agent', 'fog/v2.1.0')
     if(proxy.authorization) request.setHeader('Proxy-Authorization', proxy.authorization);
     request.setSocketKeepAlive(true);
     request.shouldKeepAlive = true;
@@ -53,7 +53,12 @@ export async function createConnection(proxy, next, socket){
         function onceResponse(/** @type {IncomingMessage} */res){
             request.off('connect', onconnect);
             request.off('error', onceErrorBeforeConnect);
-            reject({req: request, res});
+            print(
+                {level: -2}, '%s:%s returned error %d with headers %o',
+                proxy.hostname, proxy.port,
+                res.statusCode, res.headers
+            );
+            reject(new Error(format({level: 2}, ['handshake', 'err'], 'Status code during handshake: %d', res.statusCode)));
         }
         request.once('error', onceErrorBeforeConnect);
         request.once('connect', onconnect);
@@ -61,7 +66,15 @@ export async function createConnection(proxy, next, socket){
         async function onconnect(/** @type {http.IncomingMessage} */ _res, /** @type {net.Socket} */res_socket){
             request.off('error', onceErrorBeforeConnect);
             request.off('response', onceResponse);
-            if(_res.statusCode !== 200) return reject({res:_res, req: request});
+            if(_res.statusCode !== 200){
+                request.destroy();
+                print(
+                    {level: -2}, '%s:%s returned error %d with headers %o',
+                    proxy.hostname, proxy.port,
+                    _res.statusCode, _res.headers
+                );
+                return reject(new Error(format({level: 2}, ['handshake', 'err'], 'Status code during handshake: %d', _res.statusCode)));
+            }
             print({level:-1}, ['http', 'conn'], '%s:%s via proxy %s:%s', next.hostname, next.port, proxy.hostname, proxy.port);
             function onceError(/** @type {Error} */ err){
                 res_socket.off('error', onceError);

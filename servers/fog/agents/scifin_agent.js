@@ -3,7 +3,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { Duplex, Transform } from 'node:stream';
 import tls from 'node:tls';
-import { print } from '../../../logger.js'
+import { format, print } from '../../../logger.js'
 /**
  * @param {import('../../../types.js').Proxy} proxy
  * @param {import('../../../types.js').Target} next
@@ -43,7 +43,7 @@ export async function createConnection(proxy, next, socket) {
         createConnection: () => _socket,
         headers: { target: next.hostname + ':' + next.port }
     });
-    request.setHeader('User-Agent', 'fog/v2.0.1');
+    request.setHeader('User-Agent', 'fog/v2.1.0');
     if (proxy.authorization) request.setHeader('Proxy-Authorization', proxy.authorization);
     request.flushHeaders();
     return await (new Promise((resolve, reject) => {
@@ -57,7 +57,15 @@ export async function createConnection(proxy, next, socket) {
         request.once('response', onResponse);
         function onResponse(/** @type {http.IncomingMessage} */ response) {
             request.off('error', onceErrorBeforeConnect);
-            if(response.statusCode !== 200) return reject({req: request, res: response});
+            if(response.statusCode !== 200){
+                request.destroy();
+                print(
+                    {level: -2}, '%s:%s returned error %d with headers %o',
+                    proxy.hostname, proxy.port,
+                    response.statusCode, response.headers
+                );
+                return reject(new Error(format({level: 2}, ['handshake', 'err'], 'Status code during handshake: %d', response.statusCode)));
+            }
             print({level: -1}, ['scifin','conn'], '%s:%s via proxy %s:%s', next.hostname, next.port, proxy.hostname, proxy.port);
             _socket.off('error', onceErrorBeforeConnect); // _socket is now managed by req and res.
             const duplex = Duplex.from({

@@ -1,6 +1,6 @@
 {
   "name": "fog2",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Robust composition of proxies, much like function composition: f∘g(x)=f(g(x)).",
   "main": "index.js",
   "type": "module",

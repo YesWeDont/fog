@@ -7,10 +7,10 @@ import chalk from 'chalk';
 /** @typedef {import('./types').PrintOptions} PrintOptions */
 /** @typedef {{opts: Required<PrintOptions>, ev: string[], args: any[]}} ParsedOptions */
 
-export const config = {
+export const loggerConfig = {
     lenient: false,
     minLevel: process.env.VERBOSE?-2: 0,
-    defaultWid: process&&cluster.isPrimary? false : process.pid,
+    defaultWid: process&&cluster.isPrimary? false : process.pid+'',
     defaultLevel: 0,
     delegateMaster: true,
     defaultEvNames: {
@@ -50,11 +50,11 @@ function parseArgs(...params) {
         else if (arguments.length >= 2) args = params;
     }
 
-    if (opts.wid === true || opts.wid === null || opts.wid === undefined) opts.wid = config.defaultWid;
+    if (opts.wid === true || opts.wid === null || opts.wid === undefined) opts.wid = loggerConfig.defaultWid;
     if (opts.wid === '') opts.wid = false;
-    opts.level ??= config.defaultLevel;
+    opts.level ??= loggerConfig.defaultLevel;
 
-    if (!(config.lenient || opts.lenient)) {
+    if (!(loggerConfig.lenient || opts.lenient)) {
         if (typeof opts.wid !== 'number' && typeof opts.wid !== 'boolean' && typeof opts.wid !== 'string')
             throw new Error(format({ level: 2 }, 'Invalid `opts.wid` passed to `format()`, expected boolean, string or number but instead got %o', opts.wid));
         if (typeof opts.level !== 'number' || opts.level < -2 || opts.level > 2 || !Number.isInteger(opts.level))
@@ -87,12 +87,12 @@ function formatParsed(parsed) {
     let omitWid = opts.wid === false || opts.wid === '';
     if (ev.length > 1) ret += ev.slice(0, -1).reduce((prev, curr) => prev + '-' + curr, '').slice(omitWid ? 1 : 0) + ':' + ev[ev.length - 1];
     else if (ev.length == 1) ret += (omitWid ? '' : '-') + ev[0];
-    else ret += (omitWid ? '' : '-') + config.defaultEvNames[opts.level];
+    else ret += (omitWid ? '' : '-') + loggerConfig.defaultEvNames[opts.level];
 
     const next = utilFormat(...args);
-    if (!next && !(config.lenient || opts.lenient)) console.warn(format({ ...opts, level: 1 }, 'No arguments passed to log'))
+    if (!next && !(loggerConfig.lenient || opts.lenient)) console.warn(format({ ...opts, level: 1 }, 'No arguments passed to log'))
 
-    return config.levelFormatters[opts.level]('[' + ret + ']') + (next === '' ? '' : ' ' + next);
+    return loggerConfig.levelFormatters[opts.level]('[' + ret + ']') + (next === '' ? '' : ' ' + next);
 }
 
 /**
@@ -103,7 +103,7 @@ function formatParsed(parsed) {
  * @overload @param {...any} args @returns {void}
  * @param {...any} params @returns {void}
 */
-export const print = config.delegateMaster? cluster.isPrimary ?
+export const print = loggerConfig.delegateMaster? cluster.isPrimary ?
 (()=>{
     cluster.on('message', (_w, message)=>{ if(message.type === 'LOG') printFromParsed(message.data) });
     return doPrint;
@@ -123,7 +123,7 @@ function doPrint(...params) { printFromParsed(parseArgs(...params)); }
 /** @param {ParsedOptions} parsed */
 function printFromParsed(parsed) {
     const str = formatParsed(parsed);
-    if(config.minLevel > parsed.opts.level) return;
+    if(loggerConfig.minLevel > parsed.opts.level) return;
     else if(parsed.opts.level <= 0) console['log'](str);
     else if(parsed.opts.level == 1) console['warn'](str);
     else if(parsed.opts.level == 2) console['error'](str);

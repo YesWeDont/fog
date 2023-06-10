@@ -5,21 +5,16 @@ import { inspect } from 'node:util';
 import { connect } from 'node:net';
 import { print } from '../../logger.js';
 import { logOnErr } from '../../logOnErr.js';
+import { awaitConfig } from '../../config.js';
 
+const { ssl, ...config} = await awaitConfig();
 /** @type {import('../../types.js').ServerCreator} */
-const create = process.env.SSL_KEY && process.env.SSL_CERT ?
+const create = ssl.key && ssl.cert ?
     (options, requestListener) => createHTTPSServer(options, requestListener) :
     (options, requestListener) => createServer(requestListener);
 
-/** @type {import('../../types.js').Config} */
-const { sslConfig } = await new Promise(resolve => {
-    process.on('message', ({ data, type }) => {
-        if (type == 'CONFIG') resolve(data);
-    });
-    process.send?.({ type: 'REQUEST_CONFIG', data: null });
-});
 
-const server = create(sslConfig, async function onconnect(req, res) {
+const server = create(ssl, async function onconnect(req, res) {
     // Code is mostly based on the `proxy` library.
 
     const url = req.headers.target;
@@ -28,7 +23,7 @@ const server = create(sslConfig, async function onconnect(req, res) {
     if(req.method == 'GET'){
         const url = new URL(req.url??'', 'http://localhost:3000');
         if(url.pathname == '/shutdown'){
-            if(url.searchParams.get('secret') == process.env.SECRET && process.env.SECRET) {
+            if(url.searchParams.get('secret') == config.secret && config.secret) {
                 print({level: 2}, ['force-exit'], 'Worker forced exit');
                 process.send?.({ type: 'FORCE_EXIT', data: null });
             } else print({level: 2}, ['client', 'err'], 'Client provided incorrect force-exit key, or the key wasn\'t configured in env variables');
@@ -96,8 +91,8 @@ const server = create(sslConfig, async function onconnect(req, res) {
         print({level: 1}, ['client', 'err'], 'Incorrect method %s, expected POST', req.method);
         return res.writeHead(405).end();
     })
-    .listen(process.env.PORT);
+    .listen(config.port);
 
 function authenticate(/** @type {import('http').IncomingMessage} */ req) {
-    return (req.headers['proxy-authorization'] ?? '') == (process.env.AUTH ?? '')
+    return (req.headers['proxy-authorization'] ?? '') == config.auth;
 }
