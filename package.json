@@ -1,25 +1,22 @@
 {
-  "name": "fog",
-  "version": "1.0.1",
-  "description": "Chain f(x) and g(x) to form f(g(x))!",
+  "name": "fog2",
+  "version": "2.0.0",
+  "description": "Robust composition of proxies, much like function composition: f∘g(x)=f(g(x)).",
+  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "legalprox": "node ./legalprox",
-    "client": "node ./client/index.js"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "proxy1": "proxy --port 5775"
   },
-  "keywords": [
-    "legal",
-    "prox",
-    "fog",
-    "proxy"
-  ],
-  "author": "YesWeDont",
-  "license": "MIT",
-  "dependencies": {
-    "ws": "^8.13.0",
-    "longjohn": "^0.2.12"
-  },
+  "author": "",
+  "license": "ISC",
   "devDependencies": {
-    "proxy": "^1.0.2",
-    "@types/ws":"^8.13.0"
+    "@types/node": "^20.2.5",
+    "autocannon": "^7.11.0",
+    "nodemon": "^2.0.22",
+    "proxy": "^2.1.1"
+  },
+  "dependencies": {
+    "chalk": "^5.2.0"
   }
 }
