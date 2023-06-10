@@ -1,0 +1,14 @@
+[
+    {
+        "host":"http_server.js",
+        "port": 0,
+        "auth":"",
+        "type":"http"
+    },
+    {
+        "host": "ws_server.js",
+        "port": 0,
+        "auth":"",
+        "type":"ws"
+    }
+]
