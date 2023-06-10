@@ -1,5 +1,5 @@
 // @ts-check
-import http from 'node:http';
+import http, { IncomingMessage } from 'node:http';
 import net from 'node:net';
 import { Duplex } from 'node:stream';
 import tls from 'node:tls';
@@ -38,7 +38,10 @@ export async function createConnection(proxy, next, socket){
         createConnection: ()=>_socket,
         headers:{ host: next.hostname+':'+next.port, }
     });
+    request.setHeader('User-Agent', 'fog/v2.0.1')
     if(proxy.authorization) request.setHeader('Proxy-Authorization', proxy.authorization);
+    request.setSocketKeepAlive(true);
+    request.shouldKeepAlive = true;
     request.end();
     return await (new Promise((resolve, reject)=>{
         function onceErrorBeforeConnect(error){
@@ -47,11 +50,17 @@ export async function createConnection(proxy, next, socket){
             _socket.destroy();
             reject(error);
         }
+        function onceResponse(/** @type {IncomingMessage} */res){
+            request.off('connect', onconnect);
+            request.off('error', onceErrorBeforeConnect);
+            reject({req: request, res});
+        }
         request.once('error', onceErrorBeforeConnect);
         request.once('connect', onconnect);
+        request.once('response', onceResponse)
         async function onconnect(/** @type {http.IncomingMessage} */ _res, /** @type {net.Socket} */res_socket){
             request.off('error', onceErrorBeforeConnect);
-            _socket.off('error', onceErrorBeforeConnect);
+            request.off('response', onceResponse);
             if(_res.statusCode !== 200) return reject({res:_res, req: request});
             print({level:-1}, ['http', 'conn'], '%s:%s via proxy %s:%s', next.hostname, next.port, proxy.hostname, proxy.port);
             function onceError(/** @type {Error} */ err){

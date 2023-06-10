@@ -1,6 +1,6 @@
 // @ts-check
 
-import { availableParallelism } from 'node:os';
+import os from 'node:os';
 import cluster from 'node:cluster';
 import { format, print } from './logger.js'
 import { readFile } from 'node:fs/promises';
@@ -14,7 +14,7 @@ import { readFile } from 'node:fs/promises';
 */
 export async function manageThreads(src, configLocation = process.env.CONFIG) {
     let runningThreads = 0;
-    const avaliableThreads = availableParallelism();
+    const avaliableThreads = os.availableParallelism?os.availableParallelism():os.cpus().length;
     if (!cluster.isPrimary) throw new Error('Thread manager must run on main thread of cluster');
     print({level: -1 }, ['threadMgr', 'setSrc'], src);
     // @ts-ignore `serialization` is a valid property - it allows Buffers and many other good stuffs to be transferred across threads.
@@ -40,6 +40,7 @@ export async function manageThreads(src, configLocation = process.env.CONFIG) {
     cluster.on('message', (worker, message) => {
         // when the threads are ready for the config to be recieved, send it.
         if (message.type == 'REQUEST_CONFIG') worker.send({ data: config, type: 'CONFIG' });
+        else if (message.type == 'FORCE_EXIT') process.exit(1);
     });
 
     cluster.on('exit', (worker, code, _) => {
@@ -72,7 +73,7 @@ async function parseConfig(file) {
             throw new Error(`${err} Invalid config file item #${id}, expected \`type\` to be either \`http\` or \`scifin\``);
         if (a.authorization !== undefined && typeof a.authorization !== 'string')
             throw new Error(`${err} Invalid config file item #${id}, expected \`authorization\` to be a string if it is provided`);
-        if (a.tls !== undefined && typeof a.authorization !== 'boolean')
+        if (a.tls !== undefined && typeof a.tls !== 'boolean')
             throw new Error(`${err} Invalid config file item #${id}, expected \`tls\` to be a boolean if it is provided`);
     });
     if (file) print(['config', 'load'], 'Loaded config %s', file);

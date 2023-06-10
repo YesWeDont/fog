@@ -9,6 +9,7 @@ import chalk from 'chalk';
 
 export const config = {
     lenient: false,
+    minLevel: process.env.VERBOSE?-2: 0,
     defaultWid: process&&cluster.isPrimary? false : process.pid,
     defaultLevel: 0,
     delegateMaster: true,
@@ -122,7 +123,8 @@ function doPrint(...params) { printFromParsed(parseArgs(...params)); }
 /** @param {ParsedOptions} parsed */
 function printFromParsed(parsed) {
     const str = formatParsed(parsed);
-    if(parsed.opts.level <= 0) console['log'](str);
-    if(parsed.opts.level == 1) console['warn'](str);
-    if(parsed.opts.level == 2) console['error'](str);
+    if(config.minLevel > parsed.opts.level) return;
+    else if(parsed.opts.level <= 0) console['log'](str);
+    else if(parsed.opts.level == 1) console['warn'](str);
+    else if(parsed.opts.level == 2) console['error'](str);
 }

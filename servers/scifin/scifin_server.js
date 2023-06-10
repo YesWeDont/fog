@@ -4,6 +4,7 @@ import { createServer as createHTTPSServer } from 'node:https';
 import { inspect } from 'node:util';
 import { connect } from 'node:net';
 import { print } from '../../logger.js';
+import { logOnErr } from '../../logOnErr.js';
 
 /** @type {import('../../types.js').ServerCreator} */
 const create = process.env.SSL_KEY && process.env.SSL_CERT ?
@@ -23,6 +24,16 @@ const server = create(sslConfig, async function onconnect(req, res) {
 
     const url = req.headers.target;
     req.pause(); // prevent data loss
+    const onReqError = logOnErr(req, 'client');
+    if(req.method == 'GET'){
+        const url = new URL(req.url??'', 'http://localhost:3000');
+        if(url.pathname == '/shutdown'){
+            if(url.searchParams.get('secret') == process.env.SECRET && process.env.SECRET) {
+                print({level: 2}, ['force-exit'], 'Worker forced exit');
+                process.send?.({ type: 'FORCE_EXIT', data: null });
+            } else print({level: 2}, ['client', 'err'], 'Client provided incorrect force-exit key, or the key wasn\'t configured in env variables');
+        }
+    }
     if (req.method?.toUpperCase() !== 'POST') {
         print({level:1}, ['client', 'err'], 'Incorrect method %s, expected POST', req.method);
         return res.writeHead(405).end();
@@ -40,10 +51,6 @@ const server = create(sslConfig, async function onconnect(req, res) {
 
     req.resume();
 
-    req.once('error', (/** @type {NodeJS.ErrnoException} */e) =>
-        print({level: 2}, ['client', 'err'], e.code)
-    );
-
     try {
         const { hostname, port: _port } = new URL('http://' + url);
         const port = _port || '80';
@@ -59,14 +66,14 @@ const server = create(sslConfig, async function onconnect(req, res) {
         res.flushHeaders();
         req.pipe(target);
         target.pipe(res);
-        target.once('error', (/** @type {NodeJS.ErrnoException} */e) =>
-            print({level: 2}, ['foreign', 'err'], e.code)
-        )
+        const onTargetError = logOnErr(target, 'foreign')
         function cleanup() {
             target.off('close', cleanup);
+            target.off('error', onTargetError);
             target.end(() => target.destroy());
             res.off('close', cleanup);
             res.end(() => res.destroy());
+            req.off('error', onReqError);
             print({level: -1}, ['conn', 'cleanup'], '%s:%s', hostname, port);
         }
         target.once('close', cleanup)
@@ -83,9 +90,7 @@ const server = create(sslConfig, async function onconnect(req, res) {
     }
 })
     .on('connect', (req, /** @type {import('net').Socket} */socket) => {
-        socket.once('error', (/** @type {NodeJS.ErrnoException} */e) =>
-            print({level: 2}, ['client', 'err'], e.code)
-        );
+        logOnErr(socket, 'client')
         const res = new ServerResponse(req);
         res.assignSocket(socket);
         print({level: 1}, ['client', 'err'], 'Incorrect method %s, expected POST', req.method);

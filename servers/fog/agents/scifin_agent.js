@@ -13,7 +13,7 @@ import { print } from '../../../logger.js'
 export async function createConnection(proxy, next, socket) {
     /** @type {Duplex}*/
     let _socket = await new Promise((resolve, reject) => {
-        if (socket && !proxy.tls) return resolve(socket);
+        if (socket && !proxy.tls && !proxy.ssl) return resolve(socket);
         const _socket = proxy.tls || proxy.ssl ?
             tls.connect({ host: proxy.hostname, port: proxy.port, socket: socket }, onceSuccess) :
             net.connect({ host: proxy.hostname, port: proxy.port }, onceSuccess);
@@ -35,7 +35,7 @@ export async function createConnection(proxy, next, socket) {
         _socket.on('error', onceError);
         _socket.on('close', onceClose);
     });
-    let req = http.request({
+    const request = http.request({
         hostname: proxy.hostname,
         port: proxy.port,
         method: 'POST',
@@ -43,33 +43,35 @@ export async function createConnection(proxy, next, socket) {
         createConnection: () => _socket,
         headers: { target: next.hostname + ':' + next.port }
     });
-    if (proxy.authorization) req.setHeader('Proxy-Authorization', proxy.authorization);
-    req.flushHeaders();
+    request.setHeader('User-Agent', 'fog/v2.0.1');
+    if (proxy.authorization) request.setHeader('Proxy-Authorization', proxy.authorization);
+    request.flushHeaders();
     return await (new Promise((resolve, reject) => {
         function onceErrorBeforeConnect(error) {
-            req.off('connect', onconnect);
-            req.destroy();
+            request.off('connect', onResponse);
+            request.destroy();
             _socket.destroy();
             reject(error);
         }
-        req.once('error', onceErrorBeforeConnect);
-        req.once('response', onconnect);
-        function onconnect(/** @type {http.IncomingMessage} */ res) {
+        request.once('error', onceErrorBeforeConnect);
+        request.once('response', onResponse);
+        function onResponse(/** @type {http.IncomingMessage} */ response) {
+            request.off('error', onceErrorBeforeConnect);
+            if(response.statusCode !== 200) return reject({req: request, res: response});
             print({level: -1}, ['scifin','conn'], '%s:%s via proxy %s:%s', next.hostname, next.port, proxy.hostname, proxy.port);
-            req.off('error', onceErrorBeforeConnect);
             _socket.off('error', onceErrorBeforeConnect); // _socket is now managed by req and res.
             const duplex = Duplex.from({
-                readable: res,
-                writable: req
+                readable: response,
+                writable: request
             });
             duplex.once('error', onceError)
-            res.once('error', onceError);
-            req.once('error', onceError);
+            response.once('error', onceError);
+            request.once('error', onceError);
             function onceError(/** @type {Error} */ err) {
-                res.socket.off('error', onceError);
+                response.socket.off('error', onceError);
                 // destroy the streams
-                res.destroy();
-                req.destroy();
+                response.destroy();
+                request.destroy();
                 duplex.destroy();
                 print({level: 2}, ['http', 'err'], err.message);
             }

@@ -7,6 +7,7 @@ import { inspect } from 'node:util';
 import { connect } from 'node:net';
 import { Duplex } from 'node:stream';
 import { print } from '../../logger.js'
+import { logOnErr } from '../../logOnErr.js';
 
 /** @type {import('../../types.js').ServerCreator} */
 const create = process.env.SSL_KEY && process.env.SSL_CERT ?
@@ -23,11 +24,9 @@ const { sslConfig, serverConfig } = await new Promise(resolve => {
 
 const server = create(sslConfig, (req, res) => {
     // rude clients
-    req.once('error', (/** @type {NodeJS.ErrnoException} */e) =>
-        print({ level: 2 }, ['client', 'err'], e.code)
-    );
+    const onError = logOnErr(req, 'client');
     print({ level: 1 }, ['client', 'err'], 'Incorrect method %s, expected CONNECT', req.method)
-    return res.writeHead(405).end();
+    return res.writeHead(405).end(()=>req.off('error', onError));
 })
     .on('connect', async function onconnect(req, /** @type {import('net').Socket} */socket, _head) {
         // Code is mostly based on the `proxy` library.
@@ -35,7 +34,7 @@ const server = create(sslConfig, (req, res) => {
         
         /** @type {ServerResponse|null} */
         let res = new ServerResponse(req);
-        const url = req.url || req.headers.host;
+        const url = req.headers.host || req.url;
         res.shouldKeepAlive = false;
         res.chunkedEncoding = false;
         res.useChunkedEncodingByDefault = false;
@@ -46,13 +45,11 @@ const server = create(sslConfig, (req, res) => {
         }
         res.once('finish', onFinish);
 
-        socket.once('error', (/** @type {NodeJS.ErrnoException} */e) =>
-            print({level:2}, ['client', 'err'], e.code)
-        );
+        const onSocketError = logOnErr(socket, 'client');
         
         if (!url) {
             print({level:1}, ['client', 'err'], 'No `Host` header or target URL given');
-            return res.writeHead(400).end('No "url" provided.');
+            return res.writeHead(400).end('No `Host` header or target URL given.');
         }
         if (!authenticate(req)) {
             res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="proxy"' });
@@ -91,7 +88,7 @@ const server = create(sslConfig, (req, res) => {
                                 resolve(socket)
                             }
                         );
-                        socket.once('error', reject)
+                        socket.once('error', reject);
                     })
                 },
                 
@@ -100,7 +97,7 @@ const server = create(sslConfig, (req, res) => {
                     if (err instanceof Error) throw err;
                     // HTTP related errors
                     else if (err.req && err.res) {
-                        print(['handshake', 'err'], 'HTTP status %d during handshake.', err.res.statusCode);
+                        print(['handshake', 'err'], 'HTTP status %d %s', err.res.statusCode, err.res.statusMessage);
                         res?.writeHead(err.res.statusCode, err.res.headers);
                         err.res.pipe(res, { end: true });
                         err.res?.on('close', () => err.req.destroy())
@@ -124,11 +121,13 @@ const server = create(sslConfig, (req, res) => {
             target.pipe(socket);
 
             // error management, cleanup
-            target.once('error', (/** @type {NodeJS.ErrnoException} */e) => print({ level: 2 }, ['foreign', 'err'], e.code))
+            const onTargetError = logOnErr(target, 'foreign');
             function cleanup() {
                 target.off('close', cleanup);
                 target.end(() => target.destroy());
+                target.off('error', onTargetError);
                 socket.off('close', cleanup);
+                socket.off('error', onSocketError);
                 socket.end(() => socket.destroy());
                 print({ ev: 'cleanup', level: -1 }, '%s:%s', hostname, port);
             }
