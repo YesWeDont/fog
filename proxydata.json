@@ -1,0 +1,16 @@
+{
+    "servers":[
+        {
+            "host":"server1",
+            "port": 0
+        },
+        {
+            "host": "server2",
+            "port": 0
+        }
+    ],
+    "auths":[
+        "",
+        ""
+    ]
+}
