@@ -89,5 +89,6 @@ create(ssl, async function onconnect(req, res) {
     .listen(config.port);
 
 function authenticate(/** @type {import('http').IncomingMessage} */ req) {
+    print({level: -1}, 'Expected auth `%s`, and got `%s`', req.headers['proxy-authorization']??'', config.auth??'');
     return (req.headers['proxy-authorization'] ?? '') == (config.auth??'');
 }

@@ -5,8 +5,8 @@ import cluster from 'node:cluster';
 
 
 let config = await parseConfig(),
-threadLimit = config.threads,
-threads = 0;
+    threadLimit = config.threads,
+    threads = 0;
 
 // @ts-ignore `serialization` is a valid property - it allows Buffers and many other good stuffs to be transferred across threads.
 cluster.setupPrimary({ exec: config.src, serialization: 'advanced' });
@@ -23,11 +23,11 @@ cluster.on('message', (worker, message) => {
     else if (message.type == 'FORCE_EXIT') process.exit(1);
 });
 
-cluster.on('exit', (worker, code, _) => {
+cluster.on('exit', worker => {
     if (threadLimit == threads) {
         print({ wid: worker.process.pid, level: 1 }, ['died'], 'Respawning...');
         cluster.fork();
-        threads--
+        threads--;
     }
     else {
         print({ level: 2 }, 'Error occured during startup');
