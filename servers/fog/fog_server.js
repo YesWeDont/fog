@@ -33,8 +33,18 @@ const server = create(ssl, async (req, res) => {
         req.socket.off('close', abort);
         req.pipe(foreign);
         const unbindForeignErrLog = logOnErr(foreign, 'foreign');
-        req.once('error', cleanup1); // the `close` event occurs when req has run out of data
+        req.socket.once('close', cleanup1); // the `close` event occurs when req has run out of data
         foreign.once('close', cleanup1);
+        req.on('error', onError);
+        foreign.on('error', onError);
+
+        function onError(err){
+            target.off('error', onError);
+            req.off('error', onError);
+            if(this == target) print({level: 2}, ['foreign', 'err'], '%s %s', url, err.code||err.message);
+            else if(this == req) print({level: 2}, ['client', 'err'], '%s %s', url, err.code||err.message);
+            else print({level: 2}, '%s %s', url, err.code||err.message);
+        }
 
         function cleanup1(){
             unbindReqErrLog();
@@ -42,26 +52,12 @@ const server = create(ssl, async (req, res) => {
             unbindForeignErrLog();
             foreign.off('response', onResp);
             foreign.off('close', cleanup1);
-            foreign.end(()=> foreign.destroy());
-            target.end(()=> target.destroy());
-            req.destroy();
-            req.off('error', cleanup1);
-            res.end(() => { res.destroy(); });
+            req.destroy(); req.socket.off('close', cleanup1);
         }
         function onResp(resp){
             const headers = removeHopByHop(resp.headers);
             res.writeHead(resp.statusCode||200, resp.statusMessage, headers);
             resp.pipe(res);
-            res.once('close', cleanup2);
-            resp.once('close', cleanup2);
-            function cleanup2() {
-                res.off('close', cleanup2);
-                res.destroy();
-                resp.off('close', cleanup2);
-                resp.unpipe(res);
-                resp.destroy();
-                cleanup1();
-            }
         }
     } catch(e){
         // handle any errors during connection
@@ -72,7 +68,7 @@ const server = create(ssl, async (req, res) => {
             res.destroy();
             req.destroy();
         }
-        else if (e?.code == 'ENOTFOUND') res.writeHead(404).end('Host not found', unbindReqErrLog);
+        else if (e?.code == 'ENOTFOUND') res.writeHead(404).end(`Host or proxy ${e?.hostname} not found, try checking your URL or proxy config file.`, unbindReqErrLog);
         else if (e?.code == 'ERR_INVALID_URL') res.writeHead(400).end('Invalid URL', unbindReqErrLog);
         else res.writeHead(500).end(e.message || debug, unbindReqErrLog);
     }
@@ -80,8 +76,10 @@ const server = create(ssl, async (req, res) => {
     .on('connect', async function onconnect(req, /** @type {import('net').Socket} */socket) {
         // Code is mostly based on the `proxy` library.
         
+        req.pause();
         const res = new ServerResponse(req);
         const ac = new AbortController();
+        const unbindErrHandler = logOnErr(req, 'client');
         const url = req.headers.host || req.url;
         res.shouldKeepAlive = false;
         res.chunkedEncoding = false;
@@ -92,8 +90,6 @@ const server = create(ssl, async (req, res) => {
             socket.end();
         }
         res.once('finish', onFinish);
-
-        const unbindSocketErrLog = logOnErr(socket, 'client');
         
         if (!url) {
             print({level:1}, ['client', 'err'], 'No `Host` header or target URL given');
@@ -116,27 +112,34 @@ const server = create(ssl, async (req, res) => {
             res.destroy();
             socket.pipe(target);
             target.pipe(socket);
+            req.resume();
 
             // error management, cleanup
-            const unbindTargetErrorLog = logOnErr(target, 'foreign');
-            function cleanup() {
-                unbindTargetErrorLog();
-                target.unpipe(socket);
-                target.off('close', cleanup);
-                target.end(() => target.destroy());
-                socket.unpipe(target);
-                unbindSocketErrLog();
-                socket.off('close', cleanup);
-                socket.end(() => socket.destroy());
-            }
+            unbindErrHandler();
             target.once('close', cleanup);
             socket.once('close', cleanup);
+            target.once('error', onError);
+            socket.once('error', onError);
+            function cleanup(wasError) {
+                target.unpipe(socket);
+                target.end(() => target.destroy());
+                socket.unpipe(target);
+                socket.off('close', cleanup);
+                if(!wasError){ socket.off('error', onError); target.off('error', onError); }
+            }
+            function onError(err){
+                target.off('error', onError);
+                socket.off('error', onError);
+                if(this == target) print({level: 2}, ['foreign', 'err'], '%s:%s %s', hostname, port, err.code||err.message);
+                else if(this == socket) print({level: 2}, ['client', 'err'], '%s:%s %s', hostname, port, err.code||err.message);
+                else print({level: 2}, ['err'], '%s:%s %s', hostname, port, err.code||err.message);
+            }
         } catch (e) {
             // handle any errors during connection
             const debug = inspect(e);
             print({ level: 2 }, ['connect', 'err'], debug);
             if(res.destroyed) print({level: 1}, ['cleanup'], 'res already destroyed');
-            else if (e?.code == 'ENOTFOUND') res?.writeHead(404).end('Host not found');
+            else if (e?.code == 'ENOTFOUND') res?.writeHead(404).end(`Host or proxy ${e?.hostname} not found, try checking your URL or proxy config file.`);
             else if (e?.code == 'ERR_INVALID_URL') res?.writeHead(400).end('Invalid URL');
             else res.writeHead(500).end(debug);
         }

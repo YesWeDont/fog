@@ -30,9 +30,8 @@ export async function createConnection(proxy, next, signal, socket){
         _socket.once('close', onceClose);
     });
     let request = http.request({
-        hostname: proxy.hostname,
-        port: proxy.port,
-        method:'CONNECT', signal,
+        hostname: proxy.hostname, signal,
+        port: proxy.port, method:'CONNECT', 
         path: next.hostname+':'+next.port,
         // @ts-ignore createConnection() can return any value as long as it is a Duplex.
         createConnection: ()=>_socket,
@@ -44,19 +43,14 @@ export async function createConnection(proxy, next, signal, socket){
         function onErrorBeforeConnect(error){
             request.off('connect', onconnect);
             request.destroy();
-            _socket.destroy();
             reject(error);
         }
-        _socket.once('error', onErrorBeforeConnect);
-        request.once('error', onErrorBeforeConnect);
-        request.once('connect', onconnect);
-        request.end();
+        request.once('error', onErrorBeforeConnect)
+            .once('connect', onconnect).end();
         async function onconnect(/** @type {http.IncomingMessage} */ _res, /** @type {net.Socket} */res_socket){
             request.off('error', onErrorBeforeConnect);
-            _socket.off('error', onErrorBeforeConnect);
             if(_res.statusCode !== 200){
                 request.destroy();
-                _socket.destroy();
                 print( {level: -1}, '%s:%s returned error %d with headers %o',
                     proxy.hostname, proxy.port,
                     _res.statusCode, _res.headers
@@ -64,16 +58,13 @@ export async function createConnection(proxy, next, signal, socket){
                 return reject(format({level: 2}, ['handshake', 'err'], 'Status code during handshake: %d', _res.statusCode));
             }
             print({level:-1}, ['http', 'conn'], '%s:%s via proxy %s:%s', next.hostname, next.port, proxy.hostname, proxy.port);
-            function onError(/** @type {NodeJS.ErrnoException} */ err){
-                res_socket.off('error', onError);
-                request.off('error', onError);
-                res_socket.destroy();
-                request.end(()=>request.destroy());
-                _socket.destroy();
-                print({level:2}, ['http', 'err'], err.code || err.message);
+            function cleanup(wasError){
+                if(!wasError) res_socket.off('error', onError);
+                _socket.destroy(); // clean up other underlying sockets etc
             }
-            request.once('error', onError);
+            function onError(err){ print({level:2}, ['http', 'err'], err.code || err.message); }
             res_socket.once('error', onError);
+            res_socket.once('close', cleanup);
             resolve(res_socket);
         }
     }));

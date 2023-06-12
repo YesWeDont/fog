@@ -60,16 +60,15 @@ create(ssl, async function onconnect(req, res) {
         req.pipe(target);
         target.pipe(res);
         const unbindTargetErrorLog = logOnErr(target, 'foreign');
-        function cleanup() {
-            unbindTargetErrorLog();
+        function cleanup(wasErr) {
+            if(!wasErr){
+                unbindTargetErrorLog();
+                unbindClientErrorLog();
+            }
             target.off('close', cleanup);
             target.unpipe(res);
-            target.end(() => target.destroy());
-            unbindClientErrorLog();
             req.unpipe(target);
             res.off('close', cleanup);
-            res.end(() => res.destroy());
-            res.end(() => res.destroy());
             print({level: -1}, ['conn', 'cleanup'], '%s:%s', hostname, port);
         }
         target.once('close', cleanup);

@@ -30,6 +30,7 @@ export async function parseConfig() {
         port = parseInt(options.port??''),
         threads = parseInt(options.threads??'2');
     loggerConfig.minLevel = (options.verbose?.length||0) * -1;
+    print({level: -1}, ['cliCfg'], parsed);
     if(options.help) {
         const b = chalk.bold;
         const help = `fog(1) man page
@@ -71,13 +72,17 @@ Examples
         process.exit(0);
     }
 
-    if(options.port && isNaN(port) || port < 0 || !Number.isInteger(port))
-        throw new Error(`${errPrefix} Invalid port, expected a positive integer`);
+    if(options.looseTLS)
+        print({level: 1}, ['config', 'warn'], 'Warning: Loose SSL/TLS mode enabled, will not check authenticity of any SSL/TLS certificates and connections');
+    if((options['https-key'] && !options['https-cert']) || (!options['https-key'] && options['https-cert']))
+        throw new Error(`${errPrefix} \`https-key\` MUST be used in conjunction with \`https-cert\` but only one was provided`);
+    if(options.port && (isNaN(port) || port < 0 || !Number.isInteger(port)))
+        throw new Error(`${errPrefix} Invalid port (\`${options.port}\`), expected a positive integer`);
 
     if(isNaN(threads) || threads < 0 || !Number.isInteger(threads))
-        throw new Error(`${errPrefix} Invalid number of workers, expected a positive integer`);
+        throw new Error(`${errPrefix} Invalid number of workers (\`${options.threads}\`), expected a positive integer`);
 
-    print({level: 1}, ['cliCfg', 'parse'], '%d threads on port %s', threads, isNaN(port) ? '<random port>' : port);
+    print(['cliCfg'], '%d threads on port %s', threads, isNaN(port) ? '<random port>' : port);
     let src = '';
     if(args[0] == 'fog') src = './servers/fog/fog_server.js';
     else if(args[0] == 'scifin') src = './servers/scifin/scifin_server.js';
@@ -85,7 +90,9 @@ Examples
         print({level: 1}, 'No server type given, defaulting to fog client');
         src = './servers/fog/fog_server.js';
     }
-    if(!src) throw new Error(format({level: 2}, 'Unrecognised server type, expected either `fog` or `scifin`'));
+    if(!src) throw new Error(`${errPrefix} Unrecognised server type ${args[0]}, expected either \`fog\` or \`scifin\`.
+${format({level: 1}, ['hint'], 'Try using --verbose to get the list of parsed CLI args')}
+`);
 
     print({level: -1}, ['load'], src);
     

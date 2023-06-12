@@ -32,32 +32,28 @@ export async function createConnection(proxy, next, signal, socket) {
     const request = http.request({
         hostname: proxy.hostname,
         port: proxy.port, signal,
-        method: 'POST',
+        method: 'POST', headers: { Target: next.hostname + ':' + next.port },
         // @ts-ignore createConnection() can return any value as long as it is a Duplex.
         createConnection: () => _socket,
-        headers: { Target: next.hostname + ':' + next.port }
     });
     request.setHeader('User-Agent', 'fog/v' + version);
     if (proxy.authorization) request.setHeader('Proxy-Authorization', proxy.authorization);
     return await (new Promise((resolve, reject) => {
         function onErrorBeforeConnect(error) {
             request.off('connect', onResponse);
-            request.destroy();
             _socket.destroy();
             reject(error);
         }
         request.once('error', onErrorBeforeConnect);
-        _socket.once('error', onErrorBeforeConnect);
         request.once('response', onResponse);
         request.flushHeaders();
         function onResponse(/** @type {http.IncomingMessage} */ response) {
             request.off('error', onErrorBeforeConnect);
-            _socket.off('error', onErrorBeforeConnect);
             response.once('error', onError);
             request.once('error', onError);
             if(response.statusCode !== 200){
                 request.destroy();
-                _socket.destroy();
+                response.destroy();
                 print(
                     {level: -1}, '%s:%s returned error %d with headers %o',
                     proxy.hostname, proxy.port,
@@ -66,22 +62,14 @@ export async function createConnection(proxy, next, signal, socket) {
                 return reject(new Error(format({level: 2}, ['handshake', 'err'], 'Status code during handshake: %d', response.statusCode)));
             }
             print({level: -1}, ['scifin','conn'], '%s:%s via proxy %s:%s', next.hostname, next.port, proxy.hostname, proxy.port);
-            const duplex = Duplex.from({
-                readable: response,
-                writable: request
-            });
+            const duplex = Duplex.from({ readable: response, writable: request });
             duplex.once('close', cleanup);
-            function cleanup(){
-                response.destroy(); request.end(()=>request.destroy());
+            function cleanup(){ response.destroy(); request.destroy(); }
+            function onError(/** @type {NodeJS.ErrnoException} */ err) {
+                duplex.destroy(err);
                 request.off('error', onError);
                 response.off('error', onError);
-                duplex.destroy();
-                _socket.destroy(); // clean up other underlying sockets etc
-            }
-            function onError(/** @type {NodeJS.ErrnoException} */ err) {
-                duplex.emit('error', err);
                 print({level: 2}, ['scifin', 'err'], err.code || err.message);
-                cleanup();
             }
             resolve(duplex);
         }
