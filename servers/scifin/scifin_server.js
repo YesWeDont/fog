@@ -81,14 +81,13 @@ create(ssl, async function onconnect(req, res) {
         print({level: 2}, ['connect', 'err'], debug);
     }
 })
-    .on('connect', (req, /** @type {import('net').Socket} */socket) => {
+    .on('connect', (req, /** @type {import('node:net').Socket} */socket) => {
         const unbindClientErrorLog = logOnErr(socket, 'client');
         print({level: 1}, ['client', 'err'], 'Incorrect method %s, expected POST', req.method);
         return socket.end('HTTP/1.1 405 Method not allowed\r\nContent-Length: 18\r\n\r\nMethod not allowed', unbindClientErrorLog);
     })
     .listen(config.port);
 
-function authenticate(/** @type {import('http').IncomingMessage} */ req) {
-    print({level: -1}, 'Expected auth `%s`, and got %s', config.auth??'', req.headers);
+function authenticate(/** @type {import('node:http').IncomingMessage} */ req) {
     return (req.headers['proxy-authorization'] ?? '') == (config.auth??'');
 }

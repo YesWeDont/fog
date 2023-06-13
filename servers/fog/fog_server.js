@@ -32,7 +32,6 @@ const server = create(ssl, async (req, res) => {
 
         req.socket.off('close', abort);
         req.pipe(foreign);
-        const unbindForeignErrLog = logOnErr(foreign, 'foreign');
         req.socket.once('close', cleanup1);
         foreign.once('close', cleanup1);
         req.on('error', onError);
@@ -40,22 +39,17 @@ const server = create(ssl, async (req, res) => {
 
         function onError(err){
             target.off('error', onError);
-            req.off('error', onError);
+            foreign.off('error', onError);
             if(this === target) print({level: 2}, ['foreign', 'err'], '%s %s', url, err.code||err.message);
-            else if(this === req) print({level: 2}, ['client', 'err'], '%s %s', url, err.code||err.message);
+            else if(this === foreign) print({level: 2}, ['client', 'err'], '%s %s', url, err.code||err.message);
             else print({level: 2}, '%s %s', url, err.code||err.message);
         }
 
         function cleanup1(isErr){
-            if(!isErr) {
-                req.off('error', onError);
-                foreign.off('error', onError);
-            }
             foreign.off('response', onResp);
             foreign.off('close', cleanup1);
             req.socket.off('close', cleanup1);
-            unbindForeignErrLog();
-            req.destroy(); foreign.destroy();
+            if(!isErr) { req.off('error', onError); foreign.off('error', onError); }
         }
         function onResp(resp){
             const headers = removeHopByHop(resp.headers);
@@ -76,7 +70,7 @@ const server = create(ssl, async (req, res) => {
         else res.writeHead(500).end(e.message || debug, unbindReqErrLog);
     }
 })
-    .on('connect', async function onconnect(req, /** @type {import('net').Socket} */socket) {
+    .on('connect', async function onconnect(req, /** @type {import('node:net').Socket} */socket) {
         // Code is mostly based on the `proxy` library.
         
         req.pause();
@@ -125,10 +119,8 @@ const server = create(ssl, async (req, res) => {
             socket.once('error', onError);
             function cleanup(wasError) {
                 target.unpipe(socket);
-                target.off('error', onError);
-                socket.off('error', onError);
-                socket.destroy();
-                target.destroy();
+                if(this !== socket) socket.destroy();
+                if(this !== target) target.destroy();
                 if(!wasError){ socket.off('error', onError); target.off('error', onError); }
             }
             function onError(err){
@@ -153,6 +145,6 @@ process.on('exit', () =>{
     print({level: 1}, ['exit'], 'Worker exiting...');
     server.close();
 });
-function authenticate(/** @type {import('http').IncomingMessage} */ req) {
+function authenticate(/** @type {import('node:http').IncomingMessage} */ req) {
     return (req.headers['proxy-authorization'] ?? '') == (config.auth??'');
 }

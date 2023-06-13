@@ -42,7 +42,6 @@ export async function createConnection(proxy, next, signal, socket){
     return await (new Promise((resolve, reject)=>{
         function onErrorBeforeConnect(error){
             request.off('connect', onconnect);
-            request.destroy();
             reject(error);
         }
         request.once('error', onErrorBeforeConnect)
