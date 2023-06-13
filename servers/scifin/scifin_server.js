@@ -66,13 +66,13 @@ create(ssl, async function onconnect(req, res) {
                 unbindClientErrorLog();
             }
             target.off('close', cleanup);
+            req.socket.off('close', cleanup);
             target.unpipe(res);
             req.unpipe(target);
-            res.off('close', cleanup);
             print({level: -1}, ['conn', 'cleanup'], '%s:%s', hostname, port);
         }
         target.once('close', cleanup);
-        res.once('close', cleanup);
+        req.socket.once('close', cleanup);
     } catch (e) {
         const debug = inspect(e);
         if (e?.code == 'ENOTFOUND') res.writeHead(404).end('Host not found', unbindClientErrorLog);
@@ -89,6 +89,6 @@ create(ssl, async function onconnect(req, res) {
     .listen(config.port);
 
 function authenticate(/** @type {import('http').IncomingMessage} */ req) {
-    print({level: -1}, 'Expected auth `%s`, and got `%s`', req.headers['proxy-authorization']??'', config.auth??'');
+    print({level: -1}, 'Expected auth `%s`, and got %s', config.auth??'', req.headers);
     return (req.headers['proxy-authorization'] ?? '') == (config.auth??'');
 }

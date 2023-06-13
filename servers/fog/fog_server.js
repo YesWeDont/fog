@@ -33,7 +33,7 @@ const server = create(ssl, async (req, res) => {
         req.socket.off('close', abort);
         req.pipe(foreign);
         const unbindForeignErrLog = logOnErr(foreign, 'foreign');
-        req.socket.once('close', cleanup1); // the `close` event occurs when req has run out of data
+        req.socket.once('close', cleanup1);
         foreign.once('close', cleanup1);
         req.on('error', onError);
         foreign.on('error', onError);
@@ -41,18 +41,21 @@ const server = create(ssl, async (req, res) => {
         function onError(err){
             target.off('error', onError);
             req.off('error', onError);
-            if(this == target) print({level: 2}, ['foreign', 'err'], '%s %s', url, err.code||err.message);
-            else if(this == req) print({level: 2}, ['client', 'err'], '%s %s', url, err.code||err.message);
+            if(this === target) print({level: 2}, ['foreign', 'err'], '%s %s', url, err.code||err.message);
+            else if(this === req) print({level: 2}, ['client', 'err'], '%s %s', url, err.code||err.message);
             else print({level: 2}, '%s %s', url, err.code||err.message);
         }
 
-        function cleanup1(){
-            unbindReqErrLog();
-            req.unpipe(foreign);
-            unbindForeignErrLog();
+        function cleanup1(isErr){
+            if(!isErr) {
+                req.off('error', onError);
+                foreign.off('error', onError);
+            }
             foreign.off('response', onResp);
             foreign.off('close', cleanup1);
-            req.destroy(); req.socket.off('close', cleanup1);
+            req.socket.off('close', cleanup1);
+            unbindForeignErrLog();
+            req.destroy(); foreign.destroy();
         }
         function onResp(resp){
             const headers = removeHopByHop(resp.headers);
@@ -122,9 +125,10 @@ const server = create(ssl, async (req, res) => {
             socket.once('error', onError);
             function cleanup(wasError) {
                 target.unpipe(socket);
-                target.end(() => target.destroy());
-                socket.unpipe(target);
-                socket.off('close', cleanup);
+                target.off('error', onError);
+                socket.off('error', onError);
+                socket.destroy();
+                target.destroy();
                 if(!wasError){ socket.off('error', onError); target.off('error', onError); }
             }
             function onError(err){
