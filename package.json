@@ -1,12 +1,11 @@
 {
   "name": "fog2",
-  "version": "2.1.5",
+  "version": "2.2.0",
   "description": "Robust composition of proxies, much like function composition: f∘g(x)=f(g(x)).",
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "proxy1": "proxy --port 5775"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
@@ -16,7 +15,11 @@
     "nodemon": "^2.0.22",
     "proxy": "^2.1.1"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "chalk": "^5.2.0"
+    "chalk": "^5.2.0",
+    "ws": "^8.13.0"
   }
 }

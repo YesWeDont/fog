@@ -19,10 +19,6 @@ export async function parseConfig() {
                 'config':       { type: 'string', default: process.env.CONFIG, short: 'c' },
                 'threads':      { type: 'string', default: defaultThreads+'', short: 't' },
                 'auth':         {type: 'string', short: 'a', default: process.env.AUTH ?? ''},
-                'looseTLS':     { type: 'boolean', short: 'l', default: false },
-                'https-cert':   { type: 'string', short: 'C', default: process.env.HTTPS_CERT },
-                'https-key':    { type: 'string', short: 'k', default: process.env.HTTPS_KEY },
-                'admin-secret': { type: 'string', short: 's', default: process.env.SECRET},
             }, allowPositionals: true, strict: true
         }),
         {values: options, positionals: args} = parsed,
@@ -32,50 +28,13 @@ export async function parseConfig() {
     loggerConfig.minLevel = (options.verbose?.length||0) * -1;
     print({level: -1}, ['cliCfg'], parsed);
     if(options.help) {
-        const b = chalk.bold;
-        const help = `fog(1) man page
-Name
-    ${b('fog')} - Robust composition of proxies, much like function composition: f∘g(x)=f(g(x)).
-Synopsis
-    ${b('fog')} [${b('-h')} | ${b('--help')}]
-    ${b('fog')} [${b('-v')} | ${b('--verbose')}] [${b('-p')} | ${b('--port')} port] [${b('-c')} | ${b('--config')} configFilePath] [${b('-t')} | ${b('--threads')} threadCount] [${b('-a')} | ${b('--auth')} authorizationHeader] [${b('l')} | ${b('--looseTLS')}] [${b('-k')} | ${b('--https-key')} keyFile] [${b('-C')} | ${b('--https-cert')} certFile] [${b('-s')} | ${b('--admin-secret')} secret] [serverType]
-Description
-    ${b('fog')} chains multiple proxies together and hosts the result of 'composing' these proxies together on a local machine. Alternatively it can also host \`scifin\` proxies.
-    Options that ${b('fog')} understands:
-    ${b('-h')} | ${b('--help')}
-        Display this help page
-    ${b('-v')} | ${b('--verbose')}
-        Produce more detailed logs
-    ${b('-p')} | ${b('--port')} port
-        Selects which port the resultant server is hosted on. Defaults to random port
-    ${b('-c')} | ${b('--config')}
-        (fog only) Select the proxy config file for fog server
-    ${b('-t')} | ${b('--threads')} threadCount
-        Set the number of threads used by the server instance. Defaults to 2 threads.
-    ${b('-a')} | ${b('--auth')} authorizationHeader]
-        Only allow requests containing Proxy-Authorization header with the specified contents
-    ${b('l')} | ${b('--looseTLS')}
-        If true, disables checking of SSL/TLS certificates when connecting to SSL/TLS targets
-    [${b('-k')} | ${b('--https-key')} keyFile]
-        When used in conjunction with ${b('--https-cert')}, hosts a SSL/TLS server instead using given private key file.
-    [${b('-C')} | ${b('--https-cert')} certFile]
-        When used in conjunction with ${b('--https-key')}, hosts a SSL/TLS server instead using given public cert file.
-    [${b('-s')} | ${b('--admin-secret')} secret]
-        (SciFin only) Allow the server to be shut down remotely.
-    [serverType]
-        The type of server being hosted, either \`fog\` or \`scifin\`, defaults to \`fog\` if not provided.
-Examples
-    ${b('fog')} # Hosts a direct HTTP proxy server on a random port
-    ${b('fog')} -vvc ./config.json -p1080 fog # Host a fog server with servers defined by \`config.json\`, very verbose, on port 1080
-    ${b('fog')} scifin # Hosts a scifin server on a random port`;
+        const help = (await readFile('man.md')).toString()
+            .replace(/\*\*(.+?)\*\*/g, chalk.bold('$1'))
+            .replace(/$#+ (.+?)/g, chalk.bold('$1'));
         print(['help'], {wid: false}, help);
         process.exit(0);
     }
 
-    if(options.looseTLS)
-        print({level: 1}, ['config', 'warn'], 'Warning: Loose SSL/TLS mode enabled, will not check authenticity of any SSL/TLS certificates and connections');
-    if((options['https-key'] && !options['https-cert']) || (!options['https-key'] && options['https-cert']))
-        throw new Error(`${errPrefix} \`https-key\` MUST be used in conjunction with \`https-cert\` but only one was provided`);
     if(options.port && (isNaN(port) || port < 0 || !Number.isInteger(port)))
         throw new Error(`${errPrefix} Invalid port (\`${options.port}\`), expected a positive integer`);
 
@@ -86,11 +45,13 @@ Examples
     let src = '';
     if(args[0] == 'fog') src = './servers/fog/fog_server.js';
     else if(args[0] == 'scifin') src = './servers/scifin/scifin_server.js';
+    else if(args[0] == 'millimol') src = './servers/millimol/millimol_server.js';
+    else if(args[0] == 'ws') src = './servers/ws/ws_server.js';
     else if(!args[0]){
         print({level: 1}, 'No server type given, defaulting to fog client');
         src = './servers/fog/fog_server.js';
     }
-    if(!src) throw new Error(`${errPrefix} Unrecognised server type ${args[0]}, expected either \`fog\` or \`scifin\`.
+    if(!src) throw new Error(`${errPrefix} Unrecognised server type ${args[0]}, expected either \`fog\`, \`scifin\`, \`millimol\` or \`ws\`.
 ${format({level: 1}, ['hint'], 'Try using --verbose to get the list of parsed CLI args')}
 `);
 
@@ -115,26 +76,16 @@ ${format({level: 1}, ['hint'], 'Try using --verbose to get the list of parsed CL
                 throw new Error(`${errPrefix} Invalid config file item #${id}, expected \`hostname\` to be a string`);
             if (typeof a.port !== 'number')
                 throw new Error(`${errPrefix} Invalid config file item #${id}, expected \`port\` to be a number`);
-            if (a.type !== 'scifin' && a.type !== 'http')
-                throw new Error(`${errPrefix} Invalid config file item #${id}, expected \`type\` to be either \`http\` or \`scifin\``);
+            if (a.type !== 'scifin' && a.type !== 'http' && a.type !== 'millimol' && a.type !== 'ws')
+                throw new Error(`${errPrefix} Invalid config file item #${id}, expected \`type\` to be either \`http\`, \`scifin\`, \`millimol\` or \`ws\``);
             if (a.authorization !== undefined && typeof a.authorization !== 'string')
                 throw new Error(`${errPrefix} Invalid config file item #${id}, expected \`authorization\` to be a string if it is provided`);
-            if (a.tls !== undefined && typeof a.tls !== 'boolean')
-                throw new Error(`${errPrefix} Invalid config file item #${id}, expected \`tls\` to be a boolean if it is provided`);
         });
     }
-    
-    const sslConfig = {};
-    
-    if(options['https-cert']) sslConfig.cert = await readFile(options['https-cert']);
-    if(options['https-key']) sslConfig.key = await readFile(options['https-key']);
 
     return {
-        ssl: sslConfig,
         proxies, 
         port: port?port:undefined, threads, src,
-        looseTLS: options.looseTLS??false,
-        secret: options['admin-secret']??'',
         auth: options['auth']??'',
         minLevel: loggerConfig.minLevel
     };
@@ -143,17 +94,12 @@ ${format({level: 1}, ['hint'], 'Try using --verbose to get the list of parsed CL
 /** @returns {Promise<Config>} */
 export function awaitConfig(){
     return new Promise(resolve => {
-        /** @param {{type: string, data: Config}} arg0 */
-        function onMessage({ data, type }){
+        process.once('message', function onMessage(/** @param {{type: string, data: Config}} arg0 */ { data, type }){
             if (type === 'CONFIG'){
                 resolve(data);
                 loggerConfig.minLevel = data.minLevel;
-                if(data.looseTLS)
-                    process.env.NODE_TLS_REJECT_UNAUTHORISED = '0';
-                process.off('message', onMessage);
             }
-        }
-        process.on('message', onMessage);
+        });
         process.send?.({ type: 'REQUEST_CONFIG', data: null });
     });
 }

@@ -1,20 +1,15 @@
 // @ts-check
 import { ServerResponse, createServer } from 'node:http';
 import http from 'node:http';
-import { createServer as createHTTPSServer } from 'node:https';
 import { inspect } from 'node:util';
 import { print } from '../../logger.js';
 import { logOnErr, removeHopByHop } from '../../util.js';
 import { awaitConfig } from '../../config.js';
 import { createConnection } from './agents/index.js';
 
-const {ssl, proxies, ...config} = await awaitConfig();
+const {proxies, ...config} = await awaitConfig();
 
-/** @type {import('../../types.js').ServerCreator} */
-const create = ssl.key && ssl.cert ?
-    (options, requestListener) => createHTTPSServer(options, requestListener) :
-    (options, requestListener) => createServer(requestListener);
-const server = create(ssl, async (req, res) => {
+const server = createServer(async (req, res) => {
     const unbindReqErrLog = logOnErr(req, 'client');
     try{
         const ac = new AbortController();
@@ -34,22 +29,19 @@ const server = create(ssl, async (req, res) => {
         req.pipe(foreign);
         req.socket.once('close', cleanup1);
         foreign.once('close', cleanup1);
-        req.on('error', onError);
-        foreign.on('error', onError);
+        req.once('error', onError);
+        foreign.once('error', onError);
 
         function onError(err){
-            target.off('error', onError);
-            foreign.off('error', onError);
             if(this === target) print({level: 2}, ['foreign', 'err'], '%s %s', url, err.code||err.message);
             else if(this === foreign) print({level: 2}, ['client', 'err'], '%s %s', url, err.code||err.message);
             else print({level: 2}, '%s %s', url, err.code||err.message);
         }
 
-        function cleanup1(isErr){
+        function cleanup1(){
             foreign.off('response', onResp);
             foreign.off('close', cleanup1);
             req.socket.off('close', cleanup1);
-            if(!isErr) { req.off('error', onError); foreign.off('error', onError); }
         }
         function onResp(resp){
             const headers = removeHopByHop(resp.headers);
@@ -70,7 +62,7 @@ const server = create(ssl, async (req, res) => {
         else res.writeHead(500).end(e.message || debug, unbindReqErrLog);
     }
 })
-    .on('connect', async function onconnect(req, /** @type {import('node:net').Socket} */socket) {
+    .on('connect', async function onconnect(req, /** @type {import('node:net').Socket} */client) {
         // Code is mostly based on the `proxy` library.
         
         req.pause();
@@ -81,10 +73,10 @@ const server = create(ssl, async (req, res) => {
         res.shouldKeepAlive = false;
         res.chunkedEncoding = false;
         res.useChunkedEncodingByDefault = false;
-        res.assignSocket(socket);
+        res.assignSocket(client);
         function onFinish() {
-            if (res) { res.detachSocket(socket); res.destroy(); }
-            socket.end();
+            if (res) { res.detachSocket(client); res.destroy(); }
+            client.end();
         }
         res.once('finish', onFinish);
         
@@ -97,37 +89,35 @@ const server = create(ssl, async (req, res) => {
             const { hostname, port: _port } = new URL('http://' + url);
             const port = _port || '80';
             function abort(){ac.abort();}
-            socket.on('close', abort);
+            client.on('close', abort);
             const target = await createConnection(proxies, ac.signal, {hostname, port: +port});
 
             // Send 200
-            socket.off('close', abort);
+            client.off('close', abort);
             res.off('finish', onFinish)
                 .writeHead(200, 'Connection established')
                 .flushHeaders();
-            res.detachSocket(socket);
+            res.detachSocket(client);
             res.destroy();
-            socket.pipe(target);
-            target.pipe(socket);
+            client.pipe(target);
+            target.pipe(client);
             req.resume();
 
             // error management, cleanup
+
             unbindErrHandler();
             target.once('close', cleanup);
-            socket.once('close', cleanup);
+            client.once('close', cleanup);
             target.once('error', onError);
-            socket.once('error', onError);
-            function cleanup(wasError) {
-                target.unpipe(socket);
-                if(this !== socket) socket.destroy();
+            client.once('error', onError);
+            function cleanup() {
+                target.unpipe(client);
+                if(this !== client) client.destroy();
                 if(this !== target) target.destroy();
-                if(!wasError){ socket.off('error', onError); target.off('error', onError); }
             }
             function onError(err){
-                target.off('error', onError);
-                socket.off('error', onError);
                 if(this == target) print({level: 2}, ['foreign', 'err'], '%s:%s %s', hostname, port, err.code||err.message);
-                else if(this == socket) print({level: 2}, ['client', 'err'], '%s:%s %s', hostname, port, err.code||err.message);
+                else if(this == client) print({level: 2}, ['client', 'err'], '%s:%s %s', hostname, port, err.code||err.message);
                 else print({level: 2}, ['err'], '%s:%s %s', hostname, port, err.code||err.message);
             }
         } catch (e) {

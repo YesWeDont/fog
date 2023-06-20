@@ -9,7 +9,7 @@ Example format:
     "hostname":"localhost",
     "type": "scifin",
     "port": 8080,
-    "tls": false
+    "ssl": false
 },
 {
     "hostname":"localhost",

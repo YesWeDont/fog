@@ -8,8 +8,7 @@ let config = await parseConfig(),
     threadLimit = config.threads,
     threads = 0, booted = false;
 
-// @ts-ignore `serialization` is a valid property - it allows Buffers and many other good stuffs to be transferred across threads.
-cluster.setupPrimary({ exec: config.src, serialization: 'advanced' });
+cluster.setupPrimary({ exec: config.src });
 cluster.fork();
 
 cluster.on('listening', (worker, { addressType, address, port }) => {
@@ -27,10 +26,9 @@ cluster.on('message', (worker, message) => {
 cluster.on('exit', worker => {
     if (booted) {
         print({ wid: worker.process.pid, level: 1 }, ['died'], 'Respawning...');
-        cluster.fork();
-        threads--;
+        threads--; cluster.fork();
     } else {
-        print({ level: 2 }, 'Error occured during startup completed');
+        print({ level: 2 }, 'Error occured during startup');
         process.exit(1);
     }
 });
